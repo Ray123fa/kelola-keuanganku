@@ -18,6 +18,6 @@ def get_sheet(sheet_name: str):
         worksheet = spreadsheet.worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
         worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1000", cols="10")
-        worksheet.append_row(["Tanggal", "Deskripsi", "Jumlah", "Kategori", "Via"])
+        worksheet.append_row(["Tanggal", "Deskripsi", "Jumlah", "Kategori"])
     
     return worksheet
