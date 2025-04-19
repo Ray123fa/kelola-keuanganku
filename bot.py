@@ -83,72 +83,127 @@ def extract_transaction_data(formatted_response: str):
 
 @bot.message_handler(commands=['keluar'])
 def handle_text(message):
-    # Extract and parse the transaction text (after the command)
+    # Ambil teks transaksi setelah command
     transaction_text = message.text[len("/keluar"):].strip()
+    transactions = [line.strip() for line in transaction_text.split("\n") if line.strip()]
 
-    # Split the input into items (assuming each item is separated by a line break or comma)
-    transactions = transaction_text.split("\n")
-    
-    formatted_items = []
-    current_time = datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S')  # Get current time in WIB format
-    last_seen_date = None  # Initialize last seen date
+    if not transactions:
+        bot.reply_to(message, "Tidak ada transaksi yang dapat diproses.")
+        return
 
-    for line in transactions:
-        last_seen_date = format_tanggal(line, last_seen_date)  # Format tanggal if found
-        
-        # Menggunakan Gemini untuk mengekstrak data struktural dari transaksi
-        prompt = (
-            "Ambil informasi transaksi keuangan dari teks berikut: "
-            f"'{line.strip()}'\n"
-            "Tampilkan hasil dalam format teks berikut:\n"
-            "Deskripsi: <jumlah barang (seperti 1x atau 2x) dan deskripsi barang utama>\n"
-            "Jumlah: Rp<total yang dibayar, pisahkan dengan titik untuk ribuan dan koma untuk desimal, tanpa spasi setelah 'Rp'>\n"
-            "Kategori: <kategori barang/jasa>\n"
-            "Tanggal: <tanggal transaksi, jika tanggal diberikan dalam format '13 April 2025' atau '13 Apr 2025' atau '13 april 2025' atau '13 apr 2025' atau '13 April 25' atau '13 Apr 25' atau '13 april 25' atau '13 apr 25', harap temukan tanggal tersebut dan gunakan format tahun(4digit)-bulan(2digit)-tanggal jam(24jam):menit:detik, seperti 2025-04-13 00:00:00. "
-            "Jika tanggal diberikan tanpa waktu (jam:menit), maka jam dan menit diisi dengan '00:00:00'. "
-            "Jika tanggal tidak diberikan, gunakan tanda '-' untuk menandakan tanggal tidak tersedia. Jika ada tanggal sebelumnya, gunakan tanggal tersebut untuk transaksi berikutnya, atau jika tidak ada tanggal sama sekali, gunakan tanda '-' sebagai pengganti>\n\n"
-            "Pisahkan setiap transaksi dengan satu baris kosong."
-        )
+    current_time = datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S')
+    last_seen_date = None
+
+    # Bangun prompt batch dengan deskripsi tanggal seperti versi sebelumnya
+    prompt = (
+        "Berikut adalah daftar transaksi:\n\n"
+        + "\n".join(transactions) +
+        "\n\nPerlu diperhatikan bahwa penulisan harga dalam transaksi bisa menggunakan berbagai format, seperti:\n"
+        "- 15rb atau 15k berarti 15000\n"
+        "- 1,5rb / 1,5k / 1.5rb / 1.5k berarti 1500\n"
+        "- 1jt berarti 1000000\n"
+        "- 1,5jt / 1.5jt berarti 1500000\n"
+        "- 1,25jt / 1.25jt berarti 1250000\n"
+        "Konversikan seluruh bentuk harga tersebut ke dalam angka bulat penuh dalam satuan Rupiah.\n\n"
+        "Perlu diperhatikan pula bahwa tanggal yang tertera dalam transaksi dapat ditulis dalam berbagai format, seperti:\n"
+        "- 13 April 2025\n"
+        "- 13 Apr 2025\n"
+        "- 13 april 2025\n"
+        "- 13 apr 2025\n"
+        "- 13 April 25\n"
+        "- 13 Apr 25\n"
+        "- 13 april 25\n"
+        "- 13 apr 25\n"
+        "Konversikan semua format di atas ke dalam format akhir: tahun(4 digit)-bulan(2 digit)-tanggal jam(24 jam):menit:detik, seperti 2025-04-13 00:00:00.\n"
+        "Jika tidak disebutkan jam dan menit, gunakan '00:00:00'.\n"
+        "Jika tidak ada tanggal, gunakan tanda '-' untuk menandakan tanggal tidak tersedia.\n"
+        "Jika tanggal disebutkan di awal, gunakan tanggal tersebut untuk transaksi berikutnya yang tidak memiliki tanggal. Jika tidak ada sama sekali, tetap gunakan '-'>\n\n"
+        "Tampilkan hasil dalam format teks berikut:\n"
+        "Deskripsi: <jumlah barang (seperti 1x atau 2x) dan deskripsi barang utama>\n"
+        "Jumlah: Rp<total yang dibayar, pisahkan dengan titik untuk ribuan dan koma untuk desimal, tanpa spasi setelah 'Rp'>\n"
+        "Kategori: <kategori barang/jasa>\n"
+        "Tanggal: <tanggal transaksi>\n\n"
+        "Pisahkan setiap transaksi dengan satu baris kosong.\n\n"
+        "Setiap baris transaksi mewakili satu transaksi berbeda, meskipun memiliki nama atau deskripsi yang sama. Jangan pernah menggabungkan transaksi yang berbeda waktu atau tanggal."
+    )
+
+    try:
         response = vision_model.generate_content([prompt])
+    except Exception as e:
+        bot.reply_to(message, f"Gagal menghubungi Gemini API:\n{e}")
+        return
 
-        if response and response.text.strip():
-            # Assuming response.text contains a structured response
-            formatted_response = response.text.strip()
+    if not response or not response.text.strip():
+        bot.reply_to(message, "Tidak ada respons dari Gemini.")
+        return
 
-            # Ekstrak data transaksi
-            deskripsi, jumlah, kategori, tanggal = extract_transaction_data(formatted_response)
+    formatted_items = []
+    results = response.text.strip().split("\n\n")
 
-            # Tangani tanggal
-            if tanggal == '-' and last_seen_date is not None:
-                tanggal = last_seen_date
-            elif tanggal == '-' and last_seen_date is None:
-                tanggal = current_time
+    for item in results:
+        if not item.strip():
+            continue
 
-            # Formatkan harga untuk memastikan sudah sesuai dengan format
-            formatted_price = f"Rp{int(jumlah):,}".replace(',', '.')
-            
-            # Hanya menambahkan transaksi jika deskripsi dan kategori ada
-            if deskripsi not in ['-', None, 'Unknown'] and kategori not in ['-', None, 'Unknown']:
-                # Formatkan hasil
-                formatted_result = f"- Deskripsi: {deskripsi}\n- Jumlah: {formatted_price}\n- Kategori: {kategori}\n- Tanggal: {tanggal}\n"
-                formatted_items.append(formatted_result)
+        deskripsi, jumlah, kategori, tanggal = extract_transaction_data(item)
 
-                # Simpan transaksi (hanya mengirim jumlah ke sheet)
-                simpan_transaksi({"tanggal": tanggal, "deskripsi": deskripsi, "jumlah": jumlah, "kategori": kategori})
+        # Atur tanggal jika kosong
+        if tanggal == '-' and last_seen_date is not None:
+            tanggal = last_seen_date
+        elif tanggal == '-' and last_seen_date is None:
+            tanggal = current_time
+        else:
+            last_seen_date = tanggal
 
-    # Send the formatted response directly to the user
-    formatted_response = "\n".join(formatted_items)
-    bot.reply_to(message, f"Pengeluaran tercatat\n\n{formatted_response}")
+        # Validasi & simpan
+        if deskripsi not in ['-', None, 'Unknown'] and kategori not in ['-', None, 'Unknown']:
+            formatted_price = f"Rp{int(jumlah):,}".replace(",", ".")
+            formatted_result = f"- Deskripsi: {deskripsi}\n- Jumlah: {formatted_price}\n- Kategori: {kategori}\n- Tanggal: {tanggal}\n"
+            formatted_items.append(formatted_result)
+
+            simpan_transaksi({
+                "tanggal": tanggal,
+                "deskripsi": deskripsi,
+                "jumlah": jumlah,
+                "kategori": kategori
+            })
+
+    if formatted_items:
+        bot.reply_to(message, f"Pengeluaran tercatat\n\n{'\n'.join(formatted_items)}")
+    else:
+        bot.reply_to(message, "Tidak ada transaksi valid yang berhasil dicatat.")
 
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     file_info = bot.get_file(message.photo[-1].file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     image = Image.open(io.BytesIO(downloaded_file))
+    
+    current_time = datetime.now(WIB).strftime('%Y-%m-%d %H:%M:%S')
+    last_seen_date = None
 
     prompt = (
         "Ambil informasi transaksi keuangan dari gambar struk ini. Fokus pada apa yang dibayar sebagai satu transaksi utuh, "
         "dan gunakan jumlah total yang benar-benar dibayar (setelah diskon, pengiriman, layanan, pengemasan, dll).\n\n"
+        "\n\nPerlu diperhatikan bahwa penulisan harga dalam transaksi bisa menggunakan berbagai format, seperti:\n"
+        "- 15rb atau 15k berarti 15000\n"
+        "- 1,5rb / 1,5k / 1.5rb / 1.5k berarti 1500\n"
+        "- 1jt berarti 1000000\n"
+        "- 1,5jt / 1.5jt berarti 1500000\n"
+        "- 1,25jt / 1.25jt berarti 1250000\n"
+        "Konversikan seluruh bentuk harga tersebut ke dalam angka bulat penuh dalam satuan Rupiah.\n\n"
+        "Perlu diperhatikan pula bahwa tanggal yang tertera dalam transaksi dapat ditulis dalam berbagai format, seperti:\n"
+        "- 13 April 2025\n"
+        "- 13 Apr 2025\n"
+        "- 13 april 2025\n"
+        "- 13 apr 2025\n"
+        "- 13 April 25\n"
+        "- 13 Apr 25\n"
+        "- 13 april 25\n"
+        "- 13 apr 25\n"
+        "Konversikan semua format di atas ke dalam format akhir: tahun(4 digit)-bulan(2 digit)-tanggal jam(24 jam):menit:detik, seperti 2025-04-13 00:00:00.\n"
+        "Jika tidak disebutkan jam dan menit, gunakan '00:00:00'.\n"
+        "Jika tidak ada tanggal, gunakan tanda '-' untuk menandakan tanggal tidak tersedia.\n"
+        "Jika tanggal disebutkan di awal, gunakan tanggal tersebut untuk transaksi berikutnya yang tidak memiliki tanggal. Jika tidak ada sama sekali, tetap gunakan '-'>\n\n"
         "Tampilkan hasil dalam format teks berikut:\n"
         "Deskripsi: <deskripsi menu/barang utama>\n"
         "Jumlah: Rp<total yang dibayar, pisahkan dengan titik untuk ribuan dan koma untuk desimal, tanpa spasi setelah 'Rp'>\n"
@@ -157,27 +212,51 @@ def handle_photo(message):
         "Setiap transaksi harus ditampilkan lengkap dengan deskripsi, jumlah, kategori, dan tanggal.\n"
         "Pisahkan setiap transaksi dengan satu baris kosong."
     )
-    response = vision_model.generate_content([prompt, image])
 
     try:
-        # Check if the response is not empty and does not contain only whitespace
+        response = vision_model.generate_content([prompt, image])
         if not response.text.strip():
-            raise ValueError("The response from Gemini model is empty or contains only whitespace.")
+            raise ValueError("Respon dari Gemini kosong atau tidak dikenali sebagai transaksi.")
 
-        # The response will now be plain text, so just send it as-is
-        transactions = response.text.strip().split("\n\n")  # Split by blank lines to separate each transaction
+        transactions = response.text.strip().split("\n\n")
+        formatted_items = []
+        valid_transaction_found = False  # << flag tambahan
 
-        # Format the response
-        formatted_response = "\n\n".join(transactions)
+        for item in transactions:
+            if not item.strip():
+                continue
 
-        # Send the formatted response back to the user in plain text
-        bot.reply_to(message, f"{formatted_response}")
-        
-        # Regex patterns for extracting the relevant data
-        deskripsi, jumlah, kategori, tanggal = extract_transaction_data(formatted_response)
+            deskripsi, jumlah, kategori, tanggal = extract_transaction_data(item)
 
-        # Save the transaction data (send only total to sheet)
-        simpan_transaksi({"tanggal": tanggal, "deskripsi": deskripsi, "jumlah": jumlah, "kategori": kategori})
+            if tanggal == '-' and last_seen_date is not None:
+                tanggal = last_seen_date
+            elif tanggal == '-' and last_seen_date is None:
+                tanggal = current_time
+            else:
+                last_seen_date = tanggal
+
+            if deskripsi not in ['-', None, 'Unknown'] and kategori not in ['-', None, 'Unknown'] and jumlah > 0:
+                valid_transaction_found = True
+                formatted_price = f"Rp{int(jumlah):,}".replace(",", ".")
+                formatted_item = (
+                    f"- Deskripsi: {deskripsi}\n"
+                    f"- Jumlah: {formatted_price}\n"
+                    f"- Kategori: {kategori}\n"
+                    f"- Tanggal: {tanggal}"
+                )
+                formatted_items.append(formatted_item)
+
+                simpan_transaksi({
+                    "tanggal": tanggal,
+                    "deskripsi": deskripsi,
+                    "jumlah": jumlah,
+                    "kategori": kategori
+                })
+
+        if valid_transaction_found:
+            bot.reply_to(message, f"Berikut adalah informasi transaksi dari struk yang diberikan\n\n{'\n\n'.join(formatted_items)}")
+        else:
+            bot.reply_to(message, "Struk yang diberikan tidak berisi transaksi yang dapat dikenali atau dicatat.")
 
     except json.JSONDecodeError as e:
         bot.reply_to(message, f"Error saat memproses gambar: JSON Decode Error: {e}")
