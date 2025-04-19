@@ -34,5 +34,5 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no ${{ env.SSH_USER }}@${{ env.SSH_HOST }} "
             cd ${{ env.PROJECT_DIR }} &&
-            git pull origin main
+            git pull origin master
           "
